@@ -78,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         output_dir = PathBuf::from("./fonts")
     };
-    println!("")
+    println!("output_dir: {:#?}", output_dir);
     let api_key = get_api_key(args.api_key);
     let api_url = format!(
         "{base_url}?key={key}&family={fontname}",
@@ -91,18 +91,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let response = client.get(api_url).send().await?;
     let body = response.text().await?;
     let val: Font = serde_json::from_str(&body)?;
+    println!("{:#?}", val);
 
-    let font_family = val.items[0];
+    let font_family = &val.items[0];
     let mut download_tasks = Vec::new();
     let family_name = &font_family.family;
-    let files_download_dir = format!("{:#?}/{}", output_dir, family_name);
+    let files_download_dir = output_dir.join(family_name);
+    println!("files_download_dir: {:#?}", files_download_dir);
     if !Path::new(&files_download_dir).exists() {
         std::fs::create_dir(&files_download_dir)?;
     }
     for (variant, url) in &font_family.files {
         let variant_name = variant.clone();
         let download_url = url.clone();
-        let output_path = format!("{}/{}.ttf",);
+        let output_path = files_download_dir.join(variant_name);
+        println!("output_path: {:#?}", files_download_dir);
+        let task = tokio::spawn(async move { download_font_file(&download_url, &output_path) });
+        download_tasks.push(task);
     }
+    // let results = tokio::join!(download_tasks).await;
+    Ok(())
+}
+
+fn download_font_file(
+    url: &str,
+    output_path: &PathBuf,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    println!("downloading {} to {:#?}", url, output_path);
     Ok(())
 }
