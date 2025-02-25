@@ -1,6 +1,8 @@
 use clap::Parser;
 use std::{env, path::PathBuf, process};
 
+const BASE_URL: &str = "https://www.googleapis.com/webfonts/v1/webfonts";
+
 #[derive(Parser)]
 #[command(name = "gfontapi")]
 #[command(version = "0.1.0")]
@@ -10,6 +12,7 @@ use std::{env, path::PathBuf, process};
 )]
 struct Args {
     /// Name of the font to download
+    #[arg(value_name = "fontname")]
     fontname: String,
     /// Directory to place the converted fonts
     #[arg(
@@ -26,7 +29,7 @@ struct Args {
         long = "api-key",
         help_heading = "Options",
         name = "key",
-        help = "api key generated from google developer console. Can also be set as `EXPORT GFONT_API_KEY=<API_KEY>`"
+        help = "google api key generated from developer console, can also be set as `EXPORT GFONT_API_KEY=<API_KEY>`"
     )]
     api_key: Option<String>,
 }
@@ -39,7 +42,8 @@ fn get_api_key(cli_api_key: Option<String>) -> String {
     } else if let Ok(env_key) = env::var("GFONT_API_KEY") {
         api_key = env_key;
     } else {
-        eprintln!("\x1b[91merror\x1b[0m: Using `gfontapi` requires an API key. Pass it from either the command line using `gfontapi --api-key=YOUR_API_KEY` or an environment variable `export GFONT_API_KEY=YOUR_API_KEY`");
+        eprintln!("\x1b[91merror\x1b[0m: Using `gfontapi` requires an API key. Pass it from either the command line using `gfontapi --api-key=YOUR_API_KEY` or an environment variable `exp
+ort GFONT_API_KEY=YOUR_API_KEY`");
         process::exit(1);
     }
     api_key
@@ -49,18 +53,21 @@ fn get_api_key(cli_api_key: Option<String>) -> String {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // gfontapi --name=NAME --target-dir=TARGET_DIR --api-key=API_KEY
     let args = Args::parse();
-    let _output_dir = match args.target_dir {
-        None => PathBuf::from("./fonts"),
-        Some(path) => path,
+    let _output_dir: PathBuf;
+    if let Some(path) = args.target_dir {
+        _output_dir = path
+    } else {
+        _output_dir = PathBuf::from("./fonts")
     };
     let api_key = get_api_key(args.api_key);
-    let base_url = format!(
-        "https://www.googleapis.com/webfonts/v1/webfonts?key={key}&family={fontname}",
+    let api_url = format!(
+        "{base_url}?key={key}&family={fontname}",
+        base_url = BASE_URL,
         key = api_key,
         fontname = args.fontname
     );
     let client = reqwest::Client::new();
-    let response = client.get(base_url).send().await?;
+    let response = client.get(api_url).send().await?;
     let body = response.text().await?;
     println!("{}", body);
     Ok(())
