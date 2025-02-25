@@ -6,24 +6,16 @@ const BASE_URL: &str = "https://www.googleapis.com/webfonts/v1/webfonts";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Font {
-    kind: String,
     items: Vec<FontFamily>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct FontFamily {
     family: String,
-    // Use Vec<String> instead of Vec<FontVariant> enum
     variants: Vec<String>,
     subsets: Vec<String>,
-    version: String,
-    #[serde(rename = "lastModified")]
-    last_modified: String,
-    // Use HashMap for the files instead of a sequence
     files: HashMap<String, String>,
     category: String,
-    kind: String,
-    menu: String,
 }
 
 #[derive(Parser)]
@@ -74,7 +66,6 @@ ort GFONT_API_KEY=YOUR_API_KEY`");
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // gfontapi --name=NAME --target-dir=TARGET_DIR --api-key=API_KEY
     let args = Args::parse();
     let _output_dir: PathBuf;
     if let Some(path) = args.target_dir {
@@ -92,8 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
     let response = client.get(api_url).send().await?;
     let body = response.text().await?;
-    println!("{}", body);
     let val: Font = serde_json::from_str(&body)?;
-    println!("{:#?}", val);
+    let files = val.items[0].files.clone();
     Ok(())
 }
