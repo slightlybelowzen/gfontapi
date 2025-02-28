@@ -1,1 +1,8 @@
+# Rust sutff
 /target
+
+# Default output dir
+fonts
+
+# MacOS specific stuff
+.DS_Store

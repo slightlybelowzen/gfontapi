@@ -1,5 +1,6 @@
 use clap::Parser;
 use futures::{stream::FuturesUnordered, StreamExt};
+use owo_colors::OwoColorize;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, env, fs::File, io::Write, path::PathBuf, process};
@@ -45,13 +46,21 @@ struct FontFamily {
     category: String,
 }
 
+// struct ProgressState {
+//     total: usize,
+//     completed: usize,
+//     downloaded_files: Vec<String>,
+// }
+
+// TODO: Separate into commands := add, remove, compress (some people might prefer ttf idk)
+// TODO: add := specific weights, styles
+// TODO: remove := specific weights, styles
+// TODO: Add colors to CLI output (check how @uv has done it)
 #[derive(Parser)]
 #[command(name = "gfontapi")]
 #[command(version = "0.1.0")]
-#[command(about = "manage google webfonts for your application")]
-#[command(
-    help_template = "{name} v{version}\n\n{about}\n\nusage: {name} [options] [fontname]\n\noptions\n{options}"
-)]
+#[command(about = "Manage all your google fonts from the terminal.")]
+#[command(help_template = "{about}\n\nUsage: {name} [OPTIONS] [fontname]\n\nOptions\n{options}")]
 struct Args {
     /// Name of the font to download
     #[arg(value_name = "fontname")]
@@ -60,8 +69,7 @@ struct Args {
     #[arg(
         short,
         long = "target-dir",
-        help_heading = "Options",
-        name = "path",
+        help_heading = "options",
         help = "target directory, defaults to ./fonts."
     )]
     target_dir: Option<PathBuf>,
@@ -69,8 +77,7 @@ struct Args {
     #[arg(
         short,
         long = "api-key",
-        help_heading = "Options",
-        name = "key",
+        help_heading = "options",
         help = "google api key generated from developer console, can also be set as `EXPORT GFONT_API_KEY=<API_KEY>`"
     )]
     api_key: Option<String>,
@@ -79,6 +86,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    // let start_time = Instant::now();
 
     let output_dir: PathBuf;
     if let Some(path) = args.target_dir {
@@ -87,6 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         output_dir = PathBuf::from("./fonts")
     };
     let api_key = get_api_key(args.api_key);
+    // println!("Using API Key: {}", &api_key.cyan());
     let api_url = format!(
         "{base_url}?key={key}&family={fontname}",
         base_url = BASE_URL,
@@ -102,25 +111,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let font_family = &val.items[0];
     let mut download_tasks = FuturesUnordered::new();
-    let family_name = &font_family.family;
-    let files_download_dir = &output_dir.join(family_name.to_lowercase());
-    std::fs::create_dir_all(files_download_dir)?;
+    let family_name = font_family.family.to_lowercase();
+    let files_download_dir = output_dir.join(family_name.to_lowercase());
+    std::fs::create_dir_all(&files_download_dir)?;
+    // let total_files = font_family.files.len();
+    // let progress = Arc::new(Mutex::new(ProgressState {
+    //     total: total_files,
+    //     completed: 0,
+    //     downloaded_files: Vec::with_capacity(total_files),
+    // }));
     for (variant, url) in &font_family.files {
-        let variant_name = variant.clone();
+        let font_style = transpile_font_weight(&variant.clone()).or(Err(format!(
+            "Couldn't find variant mapping for {}",
+            variant
+        )))?;
         let download_url = url.clone();
+        // TOOD: this is really really bad, fix this somehow
+        let family_name_clone = family_name.clone();
+        let files_download_dir_clone = files_download_dir.clone();
         let client_clone = client.clone();
-        let output_path = files_download_dir.join(format!(
-            "{}-{}.ttf",
-            family_name.to_lowercase(),
-            transpile_font_weight(&variant_name).unwrap()
-        ));
         let task = tokio::spawn(async move {
-            download_font_file(&client_clone, &download_url, &output_path)
-                .await
-                .unwrap()
+            download_font_file(
+                &client_clone,
+                &download_url,
+                family_name_clone,
+                font_style,
+                files_download_dir_clone,
+            )
+            .await
+            .unwrap()
         });
         download_tasks.push(task);
     }
+    // println!(
+    //     "{}",
+    //     format!(
+    //         "Installed {} fonts in {}ms",
+    //         // progress_state.completed,
+    //         duration.as_millis()
+    //     )
+    //     .dimmed()
+    // );
     while let Some(result) = download_tasks.next().await {
         result.unwrap();
     }
@@ -130,15 +161,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn download_font_file(
     client: &Client,
     url: &str,
-    output_path: &PathBuf,
+    family_name: String,
+    font_style: FontStyles,
+    files_download_dir: PathBuf,
 ) -> Result<(), String> {
-    println!("downloading {} to {:#?}", url, output_path);
+    let output_path = files_download_dir.join(format!("{}-{}.ttf", family_name, &font_style));
+    println!(
+        " {} {}{}",
+        "+".green(),
+        &family_name,
+        format!("=={}", &font_style).dimmed(),
+    );
     let response = client
         .get(url)
         .send()
         .await
         .or(Err(format!("Failed to GET from {}", &url)))?;
-    let mut file = File::create(output_path).or(Err(format!(
+    let mut file = File::create(&output_path).or(Err(format!(
         "Failed to create file at: {}",
         &output_path.to_string_lossy()
     )))?;
@@ -153,7 +192,7 @@ async fn download_font_file(
     )))?;
     // TODO: This should also be its own function
     // TODO: ideally this should download and build the woff2_compress binary if it doesn't exist
-    // and then run it on the files
+    // and then run it on the files instead of shipping with it by default
     let mut process = Popen::create(
         &["./woff2_compress", &output_path.to_string_lossy()],
         PopenConfig {
@@ -162,7 +201,6 @@ async fn download_font_file(
         },
     )
     .unwrap();
-    let (_, _) = process.communicate(None).unwrap();
     if let Some(_) = process.poll() {
     } else {
         let _ = process.terminate();
@@ -175,13 +213,17 @@ async fn download_font_file(
 }
 
 fn get_api_key(cli_api_key: Option<String>) -> String {
+    // TODO: Not sure if this is the most idiomatic way to do this.
     cli_api_key
         .or_else(|| env::var("GFONT_API_KEY").ok().filter(|key| !key.is_empty()))
         .unwrap_or_else(|| {
             eprintln!(
-                "\x1b[91merror\x1b[0m: Using `gfontapi` requires an API key. \
-                Pass it from either the command line using `gfontapi --api-key=YOUR_API_KEY` \
-                or an environment variable `export GFONT_API_KEY=YOUR_API_KEY`"
+                "{}: Using gfontapi requires an API key.\
+                \n  {}\n    - export GFONT_API_KEY={}\n    - gfontapi --api-key={}",
+                "error".red(),
+                "Pass it to the program in one of the following ways".dimmed(),
+                "<YOUR_API_KEY>".cyan(),
+                "<YOUR_API_KEY>".cyan()
             );
             process::exit(1);
         })
