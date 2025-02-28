@@ -4,6 +4,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, env, fs::File, io::Write, path::PathBuf, process};
 use strum::Display;
+use subprocess::{Popen, PopenConfig};
 
 const BASE_URL: &str = "https://www.googleapis.com/webfonts/v1/webfonts";
 
@@ -73,19 +74,6 @@ struct Args {
         help = "google api key generated from developer console, can also be set as `EXPORT GFONT_API_KEY=<API_KEY>`"
     )]
     api_key: Option<String>,
-}
-
-fn get_api_key(cli_api_key: Option<String>) -> String {
-    cli_api_key
-        .or_else(|| env::var("GFONT_API_KEY").ok().filter(|key| !key.is_empty()))
-        .unwrap_or_else(|| {
-            eprintln!(
-                "\x1b[91merror\x1b[0m: Using `gfontapi` requires an API key. \
-                Pass it from either the command line using `gfontapi --api-key=YOUR_API_KEY` \
-                or an environment variable `export GFONT_API_KEY=YOUR_API_KEY`"
-            );
-            process::exit(1);
-        })
 }
 
 #[tokio::main]
@@ -163,7 +151,40 @@ async fn download_font_file(
         bytes,
         output_path.to_string_lossy()
     )))?;
+    // TODO: This should also be its own function
+    // TODO: ideally this should download and build the woff2_compress binary if it doesn't exist
+    // and then run it on the files
+    let mut process = Popen::create(
+        &["./woff2_compress", &output_path.to_string_lossy()],
+        PopenConfig {
+            stdout: subprocess::Redirection::Pipe,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let (_, _) = process.communicate(None).unwrap();
+    if let Some(_) = process.poll() {
+    } else {
+        let _ = process.terminate();
+    }
+    std::fs::remove_file(&output_path).or(Err(format!(
+        "Could not delete file: {}",
+        &output_path.to_string_lossy()
+    )))?;
     Ok(())
+}
+
+fn get_api_key(cli_api_key: Option<String>) -> String {
+    cli_api_key
+        .or_else(|| env::var("GFONT_API_KEY").ok().filter(|key| !key.is_empty()))
+        .unwrap_or_else(|| {
+            eprintln!(
+                "\x1b[91merror\x1b[0m: Using `gfontapi` requires an API key. \
+                Pass it from either the command line using `gfontapi --api-key=YOUR_API_KEY` \
+                or an environment variable `export GFONT_API_KEY=YOUR_API_KEY`"
+            );
+            process::exit(1);
+        })
 }
 
 fn transpile_font_weight(font_string: &str) -> Result<FontStyles, String> {
