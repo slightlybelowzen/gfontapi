@@ -8,6 +8,7 @@ anstyle = "1.0.10"
 clap = { version = "4.5.31", features = ["derive"] }
 futures = "0.3.31"
 futures-util = "0.3.31"
+indicatif = "0.17.11"
 owo-colors = "4.2.0"
 reqwest = "0.12.12"
 serde = { version = "1.0.218", features = ["derive"] }

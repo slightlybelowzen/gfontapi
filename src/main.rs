@@ -1,12 +1,23 @@
 use anstyle::AnsiColor;
 use clap::Parser;
 use futures::{stream::FuturesUnordered, StreamExt};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use owo_colors::OwoColorize;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, env, fs::File, io::Write, path::PathBuf, process};
+use std::{
+    collections::HashMap,
+    env,
+    fs::File,
+    io::Write,
+    path::PathBuf,
+    process,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use strum::Display;
 use subprocess::{Popen, PopenConfig};
+use tokio::time::sleep;
 
 const BASE_URL: &str = "https://www.googleapis.com/webfonts/v1/webfonts";
 
@@ -54,16 +65,9 @@ fn get_styles() -> clap::builder::Styles {
         .header(AnsiColor::Cyan.on_default())
 }
 
-// struct ProgressState {
-//     total: usize,
-//     completed: usize,
-//     downloaded_files: Vec<String>,
-// }
-
 // TODO: Separate into commands := add, remove, compress (some people might prefer ttf idk)
-// TODO: add := specific weights, styles
-// TODO: remove := specific weights, styles
-// TODO: Add colors to CLI output (check how @uv has done it)
+// TODO: add, remove := specific weights, styles
+// TODO: Add colors to CLI output
 #[derive(Parser)]
 #[command(name = "gfontapi")]
 #[command(styles=get_styles())]
@@ -95,7 +99,6 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    // let start_time = Instant::now();
 
     let output_dir: PathBuf;
     if let Some(path) = args.target_dir {
@@ -104,7 +107,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         output_dir = PathBuf::from("./fonts")
     };
     let api_key = get_api_key(args.api_key);
-    println!("Using API key: {}", &api_key.cyan());
     let api_url = format!(
         "{base_url}?key={key}&family={fontname}",
         base_url = BASE_URL,
@@ -133,17 +135,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut download_tasks = FuturesUnordered::new();
     let family_name = font_family.family.to_lowercase();
     let files_download_dir = output_dir.join(family_name.to_lowercase());
+    let total_files = font_family.files.len();
+    let downloaded_count = Arc::new(Mutex::new(0));
+    let mp = Arc::new(MultiProgress::new());
+    let spinner_style = ProgressStyle::with_template("{spinner:.green} {msg}")
+        .unwrap()
+        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
+    let main_progress = mp.add(ProgressBar::new(total_files as u64));
+    main_progress.set_message(format!("Downloading fonts (0/{})", total_files));
+    let mp_clone = Arc::clone(&mp);
+    tokio::spawn(async move {
+        mp_clone.join().unwrap();
+    });
+    main_progress.set_style(spinner_style);
     println!(
         "Creating font directory at: {}",
         &output_dir.to_string_lossy().cyan()
     );
     std::fs::create_dir_all(&files_download_dir)?;
-    // let total_files = font_family.files.len();
-    // let progress = Arc::new(Mutex::new(ProgressState {
-    //     total: total_files,
-    //     completed: 0,
-    //     downloaded_files: Vec::with_capacity(total_files),
-    // }));
+    let _total_files = font_family.files.len();
     for (variant, url) in &font_family.files {
         let font_style = transpile_font_weight(&variant.clone()).or(Err(format!(
             "Couldn't find variant mapping for {}",
@@ -154,31 +164,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let family_name_clone = family_name.clone();
         let files_download_dir_clone = files_download_dir.clone();
         let client_clone = client.clone();
+        let main_progress_clone = main_progress.clone();
+        let downloaded_count_clone = Arc::clone(&downloaded_count);
+        let mp_clone = Arc::clone(&mp);
         let task = tokio::spawn(async move {
+            let pb = mp_clone.add(ProgressBar::new(100));
+            pb.set_style(ProgressStyle::with_template("{bar:30.green/dim} {msg}").unwrap());
+            pb.set_message(format!("{}=={}", family_name_clone, font_style.dimmed()));
             download_font_file(
                 &client_clone,
                 &download_url,
                 family_name_clone,
                 font_style,
                 files_download_dir_clone,
+                pb,
             )
             .await
-            .unwrap()
+            .unwrap();
+            let mut count = downloaded_count_clone.lock().unwrap();
+            *count += 1;
+            main_progress_clone
+                .set_message(format!("Downloading fonts ({}/{})", *count, total_files));
+            main_progress_clone.inc(1);
+            if *count == total_files {
+                main_progress_clone
+                    .finish_with_message(format!("Downloaded {} fonts", total_files));
+            }
         });
         download_tasks.push(task);
     }
-    // println!(
-    //     "{}",
-    //     format!(
-    //         "Installed {} fonts in {}ms",
-    //         // progress_state.completed,
-    //         duration.as_millis()
-    //     )
-    //     .dimmed()
-    // );
     while let Some(result) = download_tasks.next().await {
         result.unwrap();
     }
+    sleep(Duration::from_millis(100)).await;
     Ok(())
 }
 
@@ -188,6 +206,7 @@ async fn download_font_file(
     family_name: String,
     font_style: FontStyles,
     files_download_dir: PathBuf,
+    progress_bar: ProgressBar,
 ) -> Result<(), String> {
     let output_path = files_download_dir.join(format!("{}-{}.ttf", family_name, &font_style));
     println!(
@@ -201,19 +220,43 @@ async fn download_font_file(
         .send()
         .await
         .or(Err(format!("Failed to GET from {}", &url)))?;
+    let total_size = response.content_length().unwrap_or(0);
     let mut file = File::create(&output_path).or(Err(format!(
         "Failed to create file at: {}",
         &output_path.to_string_lossy()
     )))?;
-    let bytes = response
-        .bytes()
-        .await
-        .or(Err(format!("No response bytes from request url: {}", url)))?;
-    file.write_all(&bytes).or(Err(format!(
-        "Couldn't write response {:#?} to file {}",
-        bytes,
-        output_path.to_string_lossy()
-    )))?;
+    let mut downloaded: u64 = 0;
+    let mut stream = response.byte_stream();
+    while let Some(item) = stream.next().await {
+        let chunk = item.or(Err("Error while downloading file".to_string()))?;
+        file.write_all(&chunk).or(Err(format!(
+            "Couldn't write chunk to file {}",
+            output_path.to_string_lossy()
+        )))?;
+
+        downloaded += chunk.len() as u64;
+
+        if total_size > 0 {
+            let percentage = (downloaded as f64 / total_size as f64 * 100.0) as u64;
+            progress_bar.set_position(percentage);
+        } else {
+            // If we can't get the total size, just pulse the bar
+            progress_bar.inc(1);
+            if progress_bar.position() >= 100 {
+                progress_bar.set_position(0);
+            }
+        }
+    }
+    progress_bar.finish_and_clear();
+    // let bytes = response
+    //     .bytes()
+    //     .await
+    //     .or(Err(format!("No response bytes from request url: {}", url)))?;
+    // file.write_all(&bytes).or(Err(format!(
+    //     "Couldn't write response {:#?} to file {}",
+    //     bytes,
+    //     output_path.to_string_lossy()
+    // )))?;
     // TODO: This should also be its own function
     // TODO: ideally this should download and build the woff2_compress binary if it doesn't exist
     // and then run it on the files instead of shipping with it by default
