@@ -16,7 +16,7 @@ use std::{
     time::Instant,
 };
 use strum::Display;
-use subprocess::{Popen, PopenConfig};
+use subprocess::{Popen, PopenConfig, Redirection};
 
 const BASE_URL: &str = "https://www.googleapis.com/webfonts/v1/webfonts";
 
@@ -143,7 +143,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap()
             .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
     );
-    // spinner.set_message(format!("Downloading fonts (0/{})", total_files));
     println!(
         "Creating font directory at: {}",
         &output_dir.to_string_lossy().cyan()
@@ -199,6 +198,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     spinner.finish_with_message(format!("{}", message.dimmed()));
     spinner.set_style(ProgressStyle::with_template("{msg}").unwrap());
     spinner.finish();
+
+    // Prints all the files that have just been added in this format
+    for (variant, _) in &font_family.files {
+        let font_style = transpile_font_weight(&variant).unwrap();
+        println!(
+            " {} {}{}",
+            "+".green(),
+            &family_name,
+            format!("=={}", &font_style).dimmed()
+        );
+    }
     Ok(())
 }
 
@@ -211,12 +221,6 @@ async fn download_font_file(
     // progress_bar: ProgressBar,
 ) -> Result<(), String> {
     let output_path = files_download_dir.join(format!("{}-{}.ttf", family_name, &font_style));
-    // println!(
-    //     " {} {}{}",
-    //     "+".green(),
-    //     &family_name,
-    //     format!("=={}", &font_style).dimmed(),
-    // );
     let response = client
         .get(url)
         .send()
@@ -232,38 +236,28 @@ async fn download_font_file(
     while let Some(item) = stream.next().await {
         let chunk = item.or(Err("Error while downloading file".to_string()))?;
         file.write_all(&chunk).or(Err(format!(
-            "Error while writing chunk to file {}",
+            "Error while writing chunk {:?} to file {}",
+            &chunk,
             output_path.to_string_lossy()
         )))?;
-
-        // downloaded += chunk.len() as u64;
-
-        // if total_size > 0 {
-        //     let percentage = (downloaded as f64 / total_size as f64 * 100.0) as u64;
-        //     progress_bar.set_position(percentage);
-        // } else {
-        //     // If we can't get the total size, just pulse the bar
-        //     progress_bar.inc(1);
-        //     if progress_bar.position() >= 100 {
-        //         progress_bar.set_position(0);
-        //     }
-        // }
     }
-    // progress_bar.finish_and_clear();
     // TODO: This should also be its own function
     // TODO: ideally this should download and build the woff2_compress binary if it doesn't exist
     // and then run it on the files instead of shipping with it by default
     let mut process = Popen::create(
         &["./woff2_compress", &output_path.to_string_lossy()],
         PopenConfig {
-            stdout: subprocess::Redirection::Pipe,
+            stdout: Redirection::Pipe,
+            stderr: Redirection::Pipe,
             ..Default::default()
         },
     )
     .unwrap();
-    if let Some(_) = process.poll() {
-    } else {
-        let _ = process.terminate();
+    // Makes sure we don't exit the thread before the subprocess has returned
+    // Not sure why that isn't the default behavior
+    let status = process.wait().unwrap();
+    if !status.success() {
+        return Err(format!("woff2_compress failed with status: {:?}", status));
     }
     std::fs::remove_file(&output_path).or(Err(format!(
         "Could not delete file: {}",
