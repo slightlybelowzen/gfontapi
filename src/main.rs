@@ -1,7 +1,8 @@
+use anstyle::AnsiColor;
 use clap::Parser;
 use futures::{stream::FuturesUnordered, StreamExt};
 use owo_colors::OwoColorize;
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, env, fs::File, io::Write, path::PathBuf, process};
 use strum::Display;
@@ -46,6 +47,13 @@ struct FontFamily {
     category: String,
 }
 
+// TODO: this isn't actually working, --help output is still not colored
+fn get_styles() -> clap::builder::Styles {
+    clap::builder::Styles::styled()
+        .usage(AnsiColor::Green.on_default())
+        .header(AnsiColor::Cyan.on_default())
+}
+
 // struct ProgressState {
 //     total: usize,
 //     completed: usize,
@@ -58,6 +66,7 @@ struct FontFamily {
 // TODO: Add colors to CLI output (check how @uv has done it)
 #[derive(Parser)]
 #[command(name = "gfontapi")]
+#[command(styles=get_styles())]
 #[command(version = "0.1.0")]
 #[command(about = "Manage all your google fonts from the terminal.")]
 #[command(help_template = "{about}\n\nUsage: {name} [OPTIONS] [fontname]\n\nOptions\n{options}")]
@@ -95,7 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         output_dir = PathBuf::from("./fonts")
     };
     let api_key = get_api_key(args.api_key);
-    // println!("Using API Key: {}", &api_key.cyan());
+    println!("Using API key: {}", &api_key.cyan());
     let api_url = format!(
         "{base_url}?key={key}&family={fontname}",
         base_url = BASE_URL,
@@ -104,15 +113,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let client = reqwest::Client::builder().build()?;
 
-    let response = client.get(api_url).send().await?;
+    let response = client.get(&api_url).send().await?;
+    if response.status() != StatusCode::OK {
+        eprintln!(
+            "{}: Failed to fetch `{}`\n  {}: {}",
+            "error".red(),
+            &api_url,
+            "Caused by".red(),
+            response.status()
+        );
+        process::exit(1);
+    };
     let body = response.text().await?;
-    let val: Font = serde_json::from_str(&body)
-        .or(Err(format!("Could not parse response into struct `Font`")))?;
+    let val: Font = serde_json::from_str(&body).or(Err(format!(
+        "Could not parse response into appropriate Font"
+    )))?;
 
     let font_family = &val.items[0];
     let mut download_tasks = FuturesUnordered::new();
     let family_name = font_family.family.to_lowercase();
     let files_download_dir = output_dir.join(family_name.to_lowercase());
+    println!(
+        "Creating font directory at: {}",
+        &output_dir.to_string_lossy().cyan()
+    );
     std::fs::create_dir_all(&files_download_dir)?;
     // let total_files = font_family.files.len();
     // let progress = Arc::new(Mutex::new(ProgressState {
@@ -126,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             variant
         )))?;
         let download_url = url.clone();
-        // TOOD: this is really really bad, fix this somehow
+        // TOOD: this is really really bad, fix this
         let family_name_clone = family_name.clone();
         let files_download_dir_clone = files_download_dir.clone();
         let client_clone = client.clone();

@@ -383,6 +383,7 @@ dependencies = [
 name = "gfontapi"
 version = "0.1.0"
 dependencies = [
+ "anstyle",
  "clap",
  "futures",
  "futures-util",
