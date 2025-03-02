@@ -1,13 +1,22 @@
 use anstyle::AnsiColor;
 use clap::Parser;
 use futures::{stream::FuturesUnordered, StreamExt};
+use indicatif::{ProgressBar, ProgressStyle};
 use owo_colors::OwoColorize;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, env, fs::File, io::Write, path::PathBuf, process, time::Duration};
+use std::{
+    collections::HashMap,
+    env,
+    fs::File,
+    io::Write,
+    path::PathBuf,
+    process,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 use strum::Display;
 use subprocess::{Popen, PopenConfig};
-use tokio::time::sleep;
 
 const BASE_URL: &str = "https://www.googleapis.com/webfonts/v1/webfonts";
 
@@ -89,6 +98,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    let start_time = Instant::now();
 
     let output_dir: PathBuf;
     if let Some(path) = args.target_dir {
@@ -125,22 +135,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut download_tasks = FuturesUnordered::new();
     let family_name = font_family.family.to_lowercase();
     let files_download_dir = output_dir.join(family_name.to_lowercase());
-    // let total_files = font_family.files.len();
-    // let downloaded_count = Arc::new(Mutex::new(0));
-    // let mp = Arc::new(MultiProgress::new());
-    // let spinner_style = ProgressStyle::with_template("{spinner:.white} {msg}")
-    //     .unwrap()
-    //     .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
-    // let main_progress = mp.add(ProgressBar::new(total_files as u64));
-    // main_progress.set_message(format!("Downloading fonts (0/{})", total_files));
-    // let mp = MultiProgress::new();
-    // main_progress.set_style(spinner_style);
+    let total_files = font_family.files.len();
+    let downloaded_count = Arc::new(Mutex::new(0));
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::with_template("{spinner:.white} {msg}")
+            .unwrap()
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+    );
+    // spinner.set_message(format!("Downloading fonts (0/{})", total_files));
     println!(
         "Creating font directory at: {}",
         &output_dir.to_string_lossy().cyan()
     );
     std::fs::create_dir_all(&files_download_dir)?;
-    let _total_files = font_family.files.len();
     for (variant, url) in &font_family.files {
         let font_style = transpile_font_weight(&variant.clone()).or(Err(format!(
             "Couldn't find variant mapping for {}",
@@ -151,7 +159,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let family_name_clone = family_name.clone();
         let files_download_dir_clone = files_download_dir.clone();
         let client_clone = client.clone();
-        // let downloaded_count_clone = Arc::clone(&downloaded_count);
+        let downloaded_count_clone = Arc::clone(&downloaded_count);
+        let spinner_clone = spinner.clone();
         // let mp_clone = Arc::clone(&mp);
         let task = tokio::spawn(async move {
             // let pb = mp_clone.add(ProgressBar::new(100));
@@ -171,22 +180,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await
             .unwrap();
-            // let mut count = downloaded_count_clone.lock().unwrap();
-            // *count += 1;
-            // main_progress_clone
-            //     .set_message(format!("Downloading fonts ({}/{})", *count, total_files));
-            // main_progress_clone.inc(1);
-            // if *count == total_files {
-            //     main_progress_clone
-            //         .finish_with_message(format!("Downloaded {} fonts", total_files));
-            // }
+            let mut count = downloaded_count_clone.lock().unwrap();
+            *count += 1;
+            spinner_clone.set_message(format!("Downloading fonts ({}/{})", *count, total_files));
+            spinner_clone.inc(1);
+            if *count == total_files {
+                spinner_clone.finish_with_message(format!("Downloaded {} fonts", total_files));
+            }
         });
         download_tasks.push(task);
     }
     while let Some(result) = download_tasks.next().await {
         result.unwrap();
     }
-    sleep(Duration::from_millis(100)).await;
+    // sleep(Duration::from_millis(100)).await;
+    let duration = start_time.elapsed();
+    let message = format!("Installed {} font files in {:.2?}", total_files, duration);
+    spinner.finish_with_message(format!("{}", message.dimmed()));
+    spinner.set_style(ProgressStyle::with_template("{msg}").unwrap());
+    spinner.finish();
     Ok(())
 }
 
@@ -199,12 +211,12 @@ async fn download_font_file(
     // progress_bar: ProgressBar,
 ) -> Result<(), String> {
     let output_path = files_download_dir.join(format!("{}-{}.ttf", family_name, &font_style));
-    println!(
-        " {} {}{}",
-        "+".green(),
-        &family_name,
-        format!("=={}", &font_style).dimmed(),
-    );
+    // println!(
+    //     " {} {}{}",
+    //     "+".green(),
+    //     &family_name,
+    //     format!("=={}", &font_style).dimmed(),
+    // );
     let response = client
         .get(url)
         .send()
@@ -220,7 +232,7 @@ async fn download_font_file(
     while let Some(item) = stream.next().await {
         let chunk = item.or(Err("Error while downloading file".to_string()))?;
         file.write_all(&chunk).or(Err(format!(
-            "Couldn't write chunk to file {}",
+            "Error while writing chunk to file {}",
             output_path.to_string_lossy()
         )))?;
 
