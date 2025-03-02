@@ -72,7 +72,9 @@ fn get_styles() -> clap::builder::Styles {
 #[command(styles=get_styles())]
 #[command(version = "0.1.0")]
 #[command(about = "Manage all your google fonts from the terminal.")]
-#[command(help_template = "{about}\n\nUsage: {name} [OPTIONS] [fontname]\n\nOptions\n{options}")]
+#[command(
+    help_template = "{about}\n\nUsage: {name} [OPTIONS] \"[fontname]\"\n\nOptions\n{options}"
+)]
 struct Args {
     /// Name of the font to download
     #[arg(value_name = "fontname")]
@@ -115,7 +117,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let client = reqwest::Client::builder().build()?;
 
-    let response = client.get(&api_url).send().await?;
+    let response = client.get(&api_url).send().await;
+    if let Err(err) = response {
+        eprintln!(
+            "{}: Failed to fetch `{}`\n  {}: {}",
+            "error".red(),
+            &api_url,
+            "Caused by".red(),
+            err
+        );
+        process::exit(1);
+    }
+    let response = response?;
     if response.status() != StatusCode::OK {
         eprintln!(
             "{}: Failed to fetch `{}`\n  {}: {}",
