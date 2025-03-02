@@ -133,7 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let font_family = &val.items[0];
     let mut download_tasks = FuturesUnordered::new();
-    let family_name = font_family.family.to_lowercase();
+    let family_name = font_family.family.to_lowercase().replace(' ', "-");
     let files_download_dir = output_dir.join(family_name.to_lowercase());
     let total_files = font_family.files.len();
     let downloaded_count = Arc::new(Mutex::new(0));
@@ -145,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!(
         "Creating font directory at: {}",
-        &output_dir.to_string_lossy().cyan()
+        &files_download_dir.to_string_lossy().cyan()
     );
     std::fs::create_dir_all(&files_download_dir)?;
     for (variant, url) in &font_family.files {
@@ -183,9 +183,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             *count += 1;
             spinner_clone.set_message(format!("Downloading fonts ({}/{})", *count, total_files));
             spinner_clone.inc(1);
-            if *count == total_files {
-                spinner_clone.finish_with_message(format!("Downloaded {} fonts", total_files));
-            }
         });
         download_tasks.push(task);
     }
