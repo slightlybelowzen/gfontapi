@@ -138,15 +138,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let total_files = font_family.files.len();
     let downloaded_count = Arc::new(Mutex::new(0));
     let mp = Arc::new(MultiProgress::new());
-    let spinner_style = ProgressStyle::with_template("{spinner:.green} {msg}")
+    let spinner_style = ProgressStyle::with_template("{spinner:.white} {msg}")
         .unwrap()
         .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
     let main_progress = mp.add(ProgressBar::new(total_files as u64));
     main_progress.set_message(format!("Downloading fonts (0/{})", total_files));
-    let mp_clone = Arc::clone(&mp);
-    tokio::spawn(async move {
-        mp_clone.join().unwrap();
-    });
+    let mp = MultiProgress::new();
     main_progress.set_style(spinner_style);
     println!(
         "Creating font directory at: {}",
@@ -164,12 +161,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let family_name_clone = family_name.clone();
         let files_download_dir_clone = files_download_dir.clone();
         let client_clone = client.clone();
-        let main_progress_clone = main_progress.clone();
         let downloaded_count_clone = Arc::clone(&downloaded_count);
         let mp_clone = Arc::clone(&mp);
         let task = tokio::spawn(async move {
             let pb = mp_clone.add(ProgressBar::new(100));
-            pb.set_style(ProgressStyle::with_template("{bar:30.green/dim} {msg}").unwrap());
+            pb.set_style(
+                ProgressStyle::with_template("{msg:10.dim} {bar:30.green/dim}")
+                    .unwrap()
+                    .progress_chars("--"),
+            );
             pb.set_message(format!("{}=={}", family_name_clone, font_style.dimmed()));
             download_font_file(
                 &client_clone,
@@ -183,13 +183,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap();
             let mut count = downloaded_count_clone.lock().unwrap();
             *count += 1;
-            main_progress_clone
-                .set_message(format!("Downloading fonts ({}/{})", *count, total_files));
-            main_progress_clone.inc(1);
-            if *count == total_files {
-                main_progress_clone
-                    .finish_with_message(format!("Downloaded {} fonts", total_files));
-            }
+            // main_progress_clone
+            //     .set_message(format!("Downloading fonts ({}/{})", *count, total_files));
+            // main_progress_clone.inc(1);
+            // if *count == total_files {
+            //     main_progress_clone
+            //         .finish_with_message(format!("Downloaded {} fonts", total_files));
+            // }
         });
         download_tasks.push(task);
     }
@@ -226,7 +226,7 @@ async fn download_font_file(
         &output_path.to_string_lossy()
     )))?;
     let mut downloaded: u64 = 0;
-    let mut stream = response.byte_stream();
+    let mut stream = response.bytes_stream();
     while let Some(item) = stream.next().await {
         let chunk = item.or(Err("Error while downloading file".to_string()))?;
         file.write_all(&chunk).or(Err(format!(
@@ -248,15 +248,6 @@ async fn download_font_file(
         }
     }
     progress_bar.finish_and_clear();
-    // let bytes = response
-    //     .bytes()
-    //     .await
-    //     .or(Err(format!("No response bytes from request url: {}", url)))?;
-    // file.write_all(&bytes).or(Err(format!(
-    //     "Couldn't write response {:#?} to file {}",
-    //     bytes,
-    //     output_path.to_string_lossy()
-    // )))?;
     // TODO: This should also be its own function
     // TODO: ideally this should download and build the woff2_compress binary if it doesn't exist
     // and then run it on the files instead of shipping with it by default
