@@ -259,6 +259,7 @@ async fn download_font_file(
         downloaded += chunk.len() as u64;
         progress_bar.set_position(downloaded);
     }
+    progress_bar.finish_and_clear();
     // TODO: This should also be its own function
     // TODO: ideally this should download and build the woff2_compress binary if it doesn't exist
     // and then run it on the files instead of shipping with it by default
