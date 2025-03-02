@@ -1,7 +1,7 @@
 use anstyle::AnsiColor;
 use clap::Parser;
 use futures::{stream::FuturesUnordered, StreamExt};
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use owo_colors::OwoColorize;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -161,6 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &files_download_dir.to_string_lossy().cyan()
     );
     std::fs::create_dir_all(&files_download_dir)?;
+    let mp = Arc::new(MultiProgress::new());
     for (variant, url) in &font_family.files {
         let font_style = transpile_font_weight(&variant.clone()).or(Err(format!(
             "Couldn't find variant mapping for {}",
@@ -173,22 +174,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let client_clone = client.clone();
         let downloaded_count_clone = Arc::clone(&downloaded_count);
         let spinner_clone = spinner.clone();
-        // let mp_clone = Arc::clone(&mp);
+        let mp_clone = Arc::clone(&mp);
         let task = tokio::spawn(async move {
-            // let pb = mp_clone.add(ProgressBar::new(100));
-            // pb.set_style(
-            //     ProgressStyle::with_template("{msg:10.dim} {bar:30.green/dim}")
-            //         .unwrap()
-            //         .progress_chars("--"),
-            // );
-            // pb.set_message(format!("{}=={}", family_name_clone, font_style.dimmed()));
+            let pb = mp_clone.add(ProgressBar::new(100));
+            pb.set_style(
+                ProgressStyle::with_template("{msg:10.dim} {bar:30.green/dim}")
+                    .unwrap()
+                    .progress_chars("--"),
+            );
+            pb.set_message(format!("{}=={}", family_name_clone, font_style.dimmed()));
             download_font_file(
                 &client_clone,
                 &download_url,
                 family_name_clone,
                 font_style,
                 files_download_dir_clone,
-                // pb,
+                pb,
             )
             .await
             .unwrap();
@@ -199,6 +200,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
         download_tasks.push(task);
     }
+    // tokio::spawn(async move {
+    //     mp.join().unwrap();
+    // });
+
     while let Some(result) = download_tasks.next().await {
         result.unwrap();
     }
@@ -228,7 +233,7 @@ async fn download_font_file(
     family_name: String,
     font_style: FontStyles,
     files_download_dir: PathBuf,
-    // progress_bar: ProgressBar,
+    progress_bar: ProgressBar,
 ) -> Result<(), String> {
     let output_path = files_download_dir.join(format!("{}-{}.ttf", family_name, &font_style));
     let response = client
@@ -236,12 +241,13 @@ async fn download_font_file(
         .send()
         .await
         .or(Err(format!("Failed to GET from {}", &url)))?;
-    // let total_size = response.content_length().unwrap_or(0);
+    let total_size = response.content_length().unwrap_or(0);
+    progress_bar.set_length(total_size);
     let mut file = File::create(&output_path).or(Err(format!(
         "Failed to create file at: {}",
         &output_path.to_string_lossy()
     )))?;
-    // let mut downloaded: u64 = 0;
+    let mut downloaded: u64 = 0;
     let mut stream = response.bytes_stream();
     while let Some(item) = stream.next().await {
         let chunk = item.or(Err("Error while downloading file".to_string()))?;
@@ -250,6 +256,8 @@ async fn download_font_file(
             &chunk,
             output_path.to_string_lossy()
         )))?;
+        downloaded += chunk.len() as u64;
+        progress_bar.set_position(downloaded);
     }
     // TODO: This should also be its own function
     // TODO: ideally this should download and build the woff2_compress binary if it doesn't exist
