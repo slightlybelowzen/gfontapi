@@ -57,6 +57,11 @@ struct FontFamily {
     category: String,
 }
 
+struct ProgressState {
+    downloaded_count: u16,
+    downloaded_files: Vec<FontStyles>,
+}
+
 // TODO: this isn't actually working, --help output is still not colored
 fn get_styles() -> clap::builder::Styles {
     clap::builder::Styles::styled()
@@ -149,7 +154,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let family_name = font_family.family.to_lowercase().replace(' ', "-");
     let files_download_dir = output_dir.join(family_name.to_lowercase());
     let total_files = font_family.files.len();
-    let downloaded_count = Arc::new(Mutex::new(0));
+    let progress_state = Arc::new(Mutex::new(ProgressState {
+        downloaded_count: 0,
+        downloaded_files: vec![],
+    }));
     let spinner = ProgressBar::new_spinner();
     spinner.set_style(
         ProgressStyle::with_template("{spinner:.white} {msg}")
@@ -170,11 +178,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let download_url = url.clone();
         // TOOD: this is really really bad, fix this
         let family_name_clone = family_name.clone();
-        let files_download_dir_clone = files_download_dir.clone();
+        // let files_download_dir_clone = files_download_dir.clone();
         let client_clone = client.clone();
-        let downloaded_count_clone = Arc::clone(&downloaded_count);
+        let progress_state_clone = Arc::clone(&progress_state);
         let spinner_clone = spinner.clone();
         let mp_clone = Arc::clone(&mp);
+        let output_path = files_download_dir.join(format!("{}-{}.ttf", family_name, &font_style));
         let task = tokio::spawn(async move {
             let pb = mp_clone.add(ProgressBar::new(100));
             pb.set_style(
@@ -183,19 +192,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .progress_chars("--"),
             );
             pb.set_message(format!("{}=={}", family_name_clone, font_style.dimmed()));
-            download_font_file(
-                &client_clone,
-                &download_url,
-                family_name_clone,
-                font_style,
-                files_download_dir_clone,
-                pb,
-            )
-            .await
-            .unwrap();
-            let mut count = downloaded_count_clone.lock().unwrap();
-            *count += 1;
-            spinner_clone.set_message(format!("Converting fonts ({}/{})", *count, total_files));
+            download_font_file(&client_clone, &download_url, output_path, pb)
+                .await
+                .unwrap();
+            let mut progress_state = progress_state_clone.lock().unwrap();
+            progress_state.downloaded_count += 1;
+            progress_state.downloaded_files.push(font_style);
+            spinner_clone.set_message(format!(
+                "Converting fonts ({}/{})",
+                progress_state.downloaded_count, total_files
+            ));
             spinner_clone.inc(1);
         });
         download_tasks.push(task);
@@ -211,13 +217,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     spinner.finish();
 
     // Prints all the files that have just been added in this format
-    for (variant, _) in &font_family.files {
-        let font_style = transpile_font_weight(&variant).unwrap();
+    for font_file in &progress_state.lock().unwrap().downloaded_files {
         println!(
             " {} {}{}",
             "+".green(),
             &family_name,
-            format!("=={}", &font_style).dimmed()
+            format!("=={}", &font_file).dimmed()
         );
     }
     Ok(())
@@ -226,12 +231,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn download_font_file(
     client: &Client,
     url: &str,
-    family_name: String,
-    font_style: FontStyles,
-    files_download_dir: PathBuf,
+    output_path: PathBuf,
     progress_bar: ProgressBar,
 ) -> Result<(), String> {
-    let output_path = files_download_dir.join(format!("{}-{}.ttf", family_name, &font_style));
     let response = client
         .get(url)
         .send()
