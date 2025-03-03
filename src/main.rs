@@ -195,21 +195,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap();
             let mut count = downloaded_count_clone.lock().unwrap();
             *count += 1;
-            spinner_clone.set_message(format!("Downloading fonts ({}/{})", *count, total_files));
+            spinner_clone.set_message(format!("Converting fonts ({}/{})", *count, total_files));
             spinner_clone.inc(1);
         });
         download_tasks.push(task);
     }
-    // tokio::spawn(async move {
-    //     mp.join().unwrap();
-    // });
 
     while let Some(result) = download_tasks.next().await {
         result.unwrap();
     }
-    // sleep(Duration::from_millis(100)).await;
     let duration = start_time.elapsed();
-    let message = format!("Installed {} font files in {:.2?}", total_files, duration);
+    let message = format!("Converted {} font files in {:.2?}", total_files, duration);
     spinner.finish_with_message(format!("{}", message.dimmed()));
     spinner.set_style(ProgressStyle::with_template("{msg}").unwrap());
     spinner.finish();
