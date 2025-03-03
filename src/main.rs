@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     env,
-    fs::File,
+    fs::{File, OpenOptions},
     io::Write,
     path::PathBuf,
     process,
@@ -169,6 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &files_download_dir.to_string_lossy().cyan()
     );
     std::fs::create_dir_all(&files_download_dir)?;
+
     let mp = Arc::new(MultiProgress::new());
     for (variant, url) in &font_family.files {
         let font_style = transpile_font_weight(&variant.clone()).or(Err(format!(
@@ -178,7 +179,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let download_url = url.clone();
         // TOOD: this is really really bad, fix this
         let family_name_clone = family_name.clone();
-        // let files_download_dir_clone = files_download_dir.clone();
         let client_clone = client.clone();
         let progress_state_clone = Arc::clone(&progress_state);
         let spinner_clone = spinner.clone();
@@ -215,6 +215,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     spinner.finish_with_message(format!("{}", message.dimmed()));
     spinner.set_style(ProgressStyle::with_template("{msg}").unwrap());
     spinner.finish();
+    println!(
+        "{} {}",
+        "Writing fonts.css file for".dimmed(),
+        &family_name.cyan()
+    );
+    let css_file_path = write_css_file_for_font(
+        &progress_state.lock().unwrap().downloaded_files,
+        &files_download_dir,
+        &family_name,
+    );
+    match css_file_path {
+        Err(err) => eprintln!(
+            "{}: Failed to write fonts file for \"{}\"\n  {}: {}",
+            "error".red(),
+            &api_url,
+            "Caused by".red(),
+            err
+        ),
+        Ok(file_path) => println!(
+            "{} {}",
+            "Finished writing fonts.css file to".dimmed(),
+            &file_path.dimmed()
+        ),
+    }
 
     // Prints all the files that have just been added in this format
     for font_file in &progress_state.lock().unwrap().downloaded_files {
@@ -226,6 +250,97 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     Ok(())
+}
+
+fn write_css_file_for_font(
+    font_styles: &Vec<FontStyles>,
+    files_download_directory: &PathBuf,
+    font_family_name: &String,
+) -> Result<String, String> {
+    let file_path = &files_download_directory.join(PathBuf::from("fonts.css"));
+    let font_family_name_transformed = format_font_string(
+        &files_download_directory
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into(),
+    );
+    for (idx, file) in font_styles.iter().enumerate() {
+        let (font_style, font_weight) = match file {
+            FontStyles::Black => ("normal", 900),
+            FontStyles::BlackItalic => ("italic", 900),
+            FontStyles::ExtraBold => ("normal", 800),
+            FontStyles::ExtraBoldItalic => ("italic", 800),
+            FontStyles::Bold => ("normal", 700),
+            FontStyles::BoldItalic => ("italic", 700),
+            FontStyles::SemiBold => ("normal", 600),
+            FontStyles::SemiBoldItalic => ("italic", 600),
+            FontStyles::Medium => ("normal", 500),
+            FontStyles::MediumItalic => ("italic", 500),
+            FontStyles::Regular => ("normal", 400),
+            FontStyles::RegularItalic => ("italic", 400),
+            FontStyles::Light => ("normal", 300),
+            FontStyles::LightItalic => ("italic", 300),
+            FontStyles::ExtraLight => ("normal", 200),
+            FontStyles::ExtraLightItalic => ("italic", 200),
+            FontStyles::Thin => ("normal", 100),
+            FontStyles::ThinItalic => ("italic", 100),
+        };
+        let font_face_string = format!(
+            "@font-face {{\n\tfont-family: \"{}\";\n\tsrc: url({});\n\tfont-style: {};\n\tfont-weight: {};\n}}\n\n",
+            &font_family_name_transformed,
+            format!("{:?}", files_download_directory.join(PathBuf::from(format!("{}-{}.woff2", font_family_name, file)))),
+            font_style,
+            font_weight
+        );
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(file_path)
+            .or(Err(format!(
+                "Could not create file at path: {:?}",
+                file_path
+            )))?;
+        // only set it to append if this is not the first iteration, otherwise successesive installations keep appending
+        if idx > 0 {
+            file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .append(true)
+                .open(file_path)
+                .or(Err(format!(
+                    "Could not create file at path: {:?}",
+                    file_path
+                )))?
+        }
+        if let Err(e) = writeln!(file, "{}", font_face_string) {
+            eprintln!(
+                "{}: Could not write to file: {:?}\n  {}: {}",
+                "error".red(),
+                &file_path,
+                "Caused by".red(),
+                e
+            )
+        }
+    }
+    Ok(file_path.to_string_lossy().into())
+}
+
+fn format_font_string(input: &String) -> String {
+    input
+        .split('-')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first_char) => {
+                    let upper_first_char = first_char.to_uppercase().collect::<String>();
+                    upper_first_char + chars.as_str()
+                }
+            }
+        })
+        .collect::<Vec<String>>()
+        .join(" ")
 }
 
 async fn download_font_file(
