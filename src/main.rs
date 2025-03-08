@@ -107,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let start_time = Instant::now();
 
-    let output_dir: PathBuf;
+    let mut output_dir: PathBuf;
     if let Some(path) = args.target_dir {
         output_dir = path
     } else {
@@ -151,8 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let font_family = &val.items[0];
     let mut download_tasks = FuturesUnordered::new();
-    let family_name = font_family.family.to_lowercase().replace(' ', "-");
-    let files_download_dir = output_dir.join(family_name.to_lowercase());
+    output_dir = output_dir.join(&family_name.to_lowercase());
     let total_files = font_family.files.len();
     let progress_state = Arc::new(Mutex::new(ProgressState {
         downloaded_count: 0,
@@ -166,9 +165,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!(
         "Creating font directory at: {}",
-        &files_download_dir.to_string_lossy().cyan()
+        &output_dir.to_string_lossy().cyan()
     );
-    std::fs::create_dir_all(&files_download_dir)?;
+    std::fs::create_dir_all(&output_dir)?;
 
     let mp = Arc::new(MultiProgress::new());
     for (variant, url) in &font_family.files {
@@ -183,7 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let progress_state_clone = Arc::clone(&progress_state);
         let spinner_clone = spinner.clone();
         let mp_clone = Arc::clone(&mp);
-        let output_path = files_download_dir.join(format!("{}-{}.ttf", family_name, &font_style));
+        let output_path = output_dir.join(format!("{}-{}.ttf", &family_name, &font_style));
         let task = tokio::spawn(async move {
             let pb = mp_clone.add(ProgressBar::new(100));
             pb.set_style(
@@ -222,7 +221,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let css_file_path = write_css_file_for_font(
         &progress_state.lock().unwrap().downloaded_files,
-        &files_download_dir,
+        &output_dir,
         &family_name,
     );
     match css_file_path {
@@ -240,7 +239,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     }
 
-    // Prints all the files that have just been added in this format
     for font_file in &progress_state.lock().unwrap().downloaded_files {
         println!(
             " {} {}{}",
@@ -287,7 +285,7 @@ fn write_css_file_for_font(
             FontStyles::ThinItalic => ("italic", 100),
         };
         let font_face_string = format!(
-            "@font-face {{\n\tfont-family: \"{}\";\n\tsrc: url({});\n\tfont-style: {};\n\tfont-weight: {};\n}}\n\n",
+            "@font-face {{\n\tfont-family: \"{}\";\n\tsrc: url({});\n\tfont-style: {};\n\tfont-weight: {};\n}}\n",
             &font_family_name_transformed,
             format!("{:?}", files_download_directory.join(PathBuf::from(format!("{}-{}.woff2", font_family_name, file)))),
             font_style,
