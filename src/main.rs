@@ -297,8 +297,9 @@ async fn download_font_files(
             );
             pb.set_message(format!("{}=={}", family_name_str, font_style.dimmed()));
             let result =
-                download_font_file(&client_clone, &download_url, output_path, pb.clone()).await;
+                download_font_file(&client_clone, &download_url, &output_path, pb.clone()).await;
             pb.finish_and_clear();
+            convert_to_woff2(&output_path)?;
 
             let mut progress_state = progress_state_clone.lock().unwrap();
             progress_state.downloaded_count += 1;
@@ -308,7 +309,7 @@ async fn download_font_files(
 
             // Update the spinner message with the current progress
             spinner_clone.set_message(format!(
-                "Downloading fonts... ({}/{})",
+                "Converting fonts... ({}/{})",
                 progress_state.downloaded_count, total_files
             ));
 
@@ -340,7 +341,7 @@ async fn download_font_files(
     spinner.set_message(format!(
         "{}",
         format!(
-            "Downloaded {} fonts in {:.2}s",
+            "Converted {} fonts in {:.2}s",
             download_count,
             duration.as_secs_f64()
         )
@@ -422,7 +423,7 @@ fn format_font_string(input: &str) -> String {
 async fn download_font_file(
     client: &Client,
     url: &str,
-    output_path: PathBuf,
+    output_path: &PathBuf,
     progress_bar: ProgressBar,
 ) -> Result<(), String> {
     let response = client
@@ -459,7 +460,6 @@ async fn download_font_file(
 
     // Don't finish or clear here - let the calling function handle it
     // This ensures proper coordination with the MultiProgress instance
-    convert_to_woff2(&output_path)?;
 
     Ok(())
 }
