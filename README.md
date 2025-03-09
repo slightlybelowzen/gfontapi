@@ -18,7 +18,7 @@ Something to note, you have to surround the font with double (or single) quotes 
 
 **Demo**
 
-![gfontapi.gif](./screencasts/gfontapi.mp4 "Usage")
+![gfontapi.gif](./screencasts/gfontapi.gif "Usage")
 
 Supports adding any google font, creates a `fonts.css` file to add support for each font variant and style.
 
