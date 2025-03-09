@@ -1,12 +1,13 @@
+pub mod fonts;
+
 use anstyle::AnsiColor;
 use clap::Parser;
+use fonts::{transpile_font_weight, Font, FontFamily, FontStyles};
 use futures::{stream::FuturesUnordered, StreamExt};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use owo_colors::OwoColorize;
 use reqwest::{Client, StatusCode};
-use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
     env,
     fs::{File, OpenOptions},
     io::Write,
@@ -15,72 +16,9 @@ use std::{
     sync::{Arc, Mutex},
     time::Instant,
 };
-use strum::Display;
 use subprocess::{Popen, PopenConfig, Redirection};
 
 const BASE_URL: &str = "https://www.googleapis.com/webfonts/v1/webfonts";
-
-#[derive(Display, Clone, Debug)]
-#[strum(serialize_all = "kebab-case")]
-enum FontStyles {
-    Thin,
-    ThinItalic,
-    ExtraLight,
-    ExtraLightItalic,
-    Light,
-    LightItalic,
-    Regular,
-    RegularItalic,
-    Medium,
-    MediumItalic,
-    SemiBold,
-    SemiBoldItalic,
-    Bold,
-    BoldItalic,
-    ExtraBold,
-    ExtraBoldItalic,
-    Black,
-    BlackItalic,
-}
-
-impl FontStyles {
-    fn get_style_and_weight(&self) -> (&'static str, u16) {
-        match self {
-            FontStyles::Black => ("normal", 900),
-            FontStyles::BlackItalic => ("italic", 900),
-            FontStyles::ExtraBold => ("normal", 800),
-            FontStyles::ExtraBoldItalic => ("italic", 800),
-            FontStyles::Bold => ("normal", 700),
-            FontStyles::BoldItalic => ("italic", 700),
-            FontStyles::SemiBold => ("normal", 600),
-            FontStyles::SemiBoldItalic => ("italic", 600),
-            FontStyles::Medium => ("normal", 500),
-            FontStyles::MediumItalic => ("italic", 500),
-            FontStyles::Regular => ("normal", 400),
-            FontStyles::RegularItalic => ("italic", 400),
-            FontStyles::Light => ("normal", 300),
-            FontStyles::LightItalic => ("italic", 300),
-            FontStyles::ExtraLight => ("normal", 200),
-            FontStyles::ExtraLightItalic => ("italic", 200),
-            FontStyles::Thin => ("normal", 100),
-            FontStyles::ThinItalic => ("italic", 100),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Font {
-    items: Vec<FontFamily>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct FontFamily {
-    family: String,
-    variants: Vec<String>,
-    subsets: Vec<String>,
-    files: HashMap<String, String>,
-    category: String,
-}
 
 struct ProgressState {
     downloaded_count: u16,
@@ -127,29 +65,9 @@ struct Args {
     api_key: Option<String>,
 }
 
-#[derive(Debug)]
-enum ApiError {
-    RequestFailed(reqwest::Error),
-    BadStatus(StatusCode),
-    ParseError(String),
-}
-
-impl std::fmt::Display for ApiError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ApiError::RequestFailed(err) => write!(f, "Request failed: {}", err),
-            ApiError::BadStatus(status) => write!(f, "Bad status code: {}", status),
-            ApiError::ParseError(msg) => write!(f, "Parse error: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for ApiError {}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    // let start_time = Instant::now();
 
     let output_dir = get_output_dir(args.target_dir);
     let api_key = get_api_key(args.api_key);
@@ -216,16 +134,21 @@ async fn fetch_font_data(
         fontname = font_name
     );
 
-    let response = client.get(&api_url).send().await.map_err(|err| {
-        eprintln!(
-            "{}: Failed to fetch `{}`\n  {}: {}",
-            "error".red(),
-            &api_url,
-            "Caused by".red(),
-            err
-        );
-        ApiError::RequestFailed(err)
-    })?;
+    let response = client
+        .get(&api_url)
+        .send()
+        .await
+        .map_err(|err| {
+            eprintln!(
+                "{}: Failed to fetch `{}`\n  {}: {}",
+                "error".red(),
+                &api_url,
+                "Caused by".red(),
+                err
+            );
+            process::exit(1);
+        })
+        .unwrap();
 
     if response.status() != StatusCode::OK {
         let status = response.status();
@@ -236,12 +159,13 @@ async fn fetch_font_data(
             "Caused by".red(),
             status
         );
-        return Err(Box::new(ApiError::BadStatus(status)));
+        process::exit(1);
     }
 
     let body = response.text().await?;
     let font_data: Font = serde_json::from_str(&body)
-        .map_err(|_| ApiError::ParseError("Could not parse response".to_string()))?;
+        .map_err(|_| eprintln!("Could not parse response"))
+        .unwrap();
 
     Ok(font_data.items[0].clone())
 }
@@ -261,14 +185,12 @@ async fn download_font_files(
 
     let spinner = ProgressBar::new_spinner();
 
-    // Set up two different styles - one for progress and one for completion
     let progress_style = ProgressStyle::with_template("{spinner:.white} {msg}")
         .unwrap()
         .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
 
-    let completion_style = ProgressStyle::with_template("{msg}").unwrap();
+    let completion_style = ProgressStyle::with_template("{msg.dimmed()}").unwrap();
 
-    // Start with the progress style
     spinner.set_style(progress_style);
 
     let mp = Arc::new(MultiProgress::new());
@@ -327,28 +249,19 @@ async fn download_font_files(
         }
     }
 
-    // Get the final count of downloaded files
     let downloaded_files = progress_state.lock().unwrap().downloaded_files.clone();
     let download_count = downloaded_files.len();
 
-    // Calculate elapsed time
     let duration = start_time.elapsed();
 
-    // Switch to the completion style (no spinner)
     spinner.set_style(completion_style);
 
-    // Set the final message without emoji
     spinner.set_message(format!(
-        "{}",
-        format!(
-            "Converted {} fonts in {:.2}s",
-            download_count,
-            duration.as_secs_f64()
-        )
-        .dimmed()
+        "Converted {} fonts in {:.2}s",
+        download_count,
+        duration.as_secs_f64() // )
     ));
 
-    // Finish but don't clear - we want the message to remain visible
     spinner.finish();
 
     Ok(downloaded_files)
@@ -460,7 +373,6 @@ async fn download_font_file(
 
     // Don't finish or clear here - let the calling function handle it
     // This ensures proper coordination with the MultiProgress instance
-
     Ok(())
 }
 
@@ -503,32 +415,4 @@ fn get_api_key(cli_api_key: Option<String>) -> String {
             );
             process::exit(1);
         })
-}
-
-fn transpile_font_weight(font_string: &str) -> Result<FontStyles, String> {
-    let font_weight_mappings: HashMap<&str, FontStyles> = HashMap::from([
-        ("100", FontStyles::Thin),
-        ("100italic", FontStyles::ThinItalic),
-        ("200", FontStyles::ExtraLight),
-        ("200italic", FontStyles::ExtraLightItalic),
-        ("300", FontStyles::Light),
-        ("300italic", FontStyles::LightItalic),
-        ("regular", FontStyles::Regular),
-        ("italic", FontStyles::RegularItalic),
-        ("500", FontStyles::Medium),
-        ("500italic", FontStyles::MediumItalic),
-        ("600", FontStyles::SemiBold),
-        ("600italic", FontStyles::SemiBoldItalic),
-        ("700", FontStyles::Bold),
-        ("700italic", FontStyles::BoldItalic),
-        ("800", FontStyles::ExtraBold),
-        ("800italic", FontStyles::ExtraBoldItalic),
-        ("900", FontStyles::Black),
-        ("900italic", FontStyles::BlackItalic),
-    ]);
-
-    font_weight_mappings
-        .get(font_string)
-        .cloned()
-        .ok_or_else(|| "Couldn't find the variant in the hashmap".to_owned())
 }
