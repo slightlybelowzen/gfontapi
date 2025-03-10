@@ -1,6 +1,5 @@
 pub mod fonts;
 
-use anstyle::AnsiColor;
 use clap::Parser;
 use fonts::{transpile_font_weight, Font, FontFamily, FontStyles};
 use futures::{stream::FuturesUnordered, StreamExt};
@@ -11,7 +10,7 @@ use std::{
     env,
     fs::{File, OpenOptions},
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process,
     sync::{Arc, Mutex},
     time::Instant,
@@ -25,19 +24,11 @@ struct ProgressState {
     downloaded_files: Vec<FontStyles>,
 }
 
-// TODO: this isn't actually working, --help output is still not colored
-fn get_styles() -> clap::builder::Styles {
-    clap::builder::Styles::styled()
-        .usage(AnsiColor::Green.on_default())
-        .header(AnsiColor::Cyan.on_default())
-}
-
 // TODO: Separate into commands := add, remove, compress (some people might prefer ttf idk)
 // TODO: add, remove := specific weights, styles
 // TODO: Add colors to CLI output
 #[derive(Parser)]
 #[command(name = "gfontapi")]
-#[command(styles=get_styles())]
 #[command(version = "0.1.0")]
 #[command(about = "Manage all your google fonts from the terminal.")]
 #[command(
@@ -376,9 +367,35 @@ async fn download_font_file(
     Ok(())
 }
 
+fn get_woff2_compress_path() -> Result<PathBuf, String> {
+    // Check in ./
+    if let Ok(exe_path) = env::current_exe() {
+        let exe_dir = exe_path.parent().unwrap_or(Path::new("."));
+        let woff2_path = exe_dir.join("woff2_compress");
+
+        if woff2_path.exists() {
+            return Ok(woff2_path);
+        }
+    }
+
+    // Check in ~/.gfontapi/bin/
+    let home = env::var("HOME").unwrap_or_else(|_| "~".to_string());
+    let gfontapi_bin = PathBuf::from(format!("{}/.gfontapi/bin/woff2_compress", home));
+
+    if gfontapi_bin.exists() {
+        return Ok(gfontapi_bin);
+    }
+
+    Err(format!("Could not locate the woff2_compress binary"))
+}
+
 fn convert_to_woff2(ttf_path: &PathBuf) -> Result<(), String> {
+    let woff2_compress_path = match get_woff2_compress_path() {
+        Ok(path) => path,
+        Err(e) => return Err(e),
+    };
     let mut process = Popen::create(
-        &["./woff2_compress", &ttf_path.to_string_lossy()],
+        &[woff2_compress_path, ttf_path.clone()],
         PopenConfig {
             stdout: Redirection::Pipe,
             stderr: Redirection::Pipe,
