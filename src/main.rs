@@ -1,6 +1,5 @@
 pub mod fonts;
 
-use anstyle::AnsiColor;
 use clap::Parser;
 use fonts::{transpile_font_weight, Font, FontFamily, FontStyles};
 use futures::{stream::FuturesUnordered, StreamExt};
@@ -25,19 +24,11 @@ struct ProgressState {
     downloaded_files: Vec<FontStyles>,
 }
 
-// TODO: this isn't actually working, --help output is still not colored
-fn get_styles() -> clap::builder::Styles {
-    clap::builder::Styles::styled()
-        .usage(AnsiColor::Green.on_default())
-        .header(AnsiColor::Cyan.on_default())
-}
-
 // TODO: Separate into commands := add, remove, compress (some people might prefer ttf idk)
 // TODO: add, remove := specific weights, styles
 // TODO: Add colors to CLI output
 #[derive(Parser)]
 #[command(name = "gfontapi")]
-#[command(styles=get_styles())]
 #[command(version = "0.1.0")]
 #[command(about = "Manage all your google fonts from the terminal.")]
 #[command(
@@ -376,9 +367,30 @@ async fn download_font_file(
     Ok(())
 }
 
+fn get_woff2_compress() -> Result<PathBuf, String> {
+    let binary_exists: Vec<PathBuf> = [
+        "/usr/local/bin/woff2_compress",
+        "~/.gfontapi/bin/woff2_compress",
+    ]
+    .iter()
+    .map(|x| PathBuf::from(x))
+    .filter(|x| x.exists())
+    .collect();
+    if binary_exists.len() == 0 {
+        return Err(format!(
+            "Could not locate woff2_compress binary in /usr/local/bin"
+        ));
+    }
+    Ok(binary_exists[0].clone())
+}
+
 fn convert_to_woff2(ttf_path: &PathBuf) -> Result<(), String> {
+    let woff2_compress = match get_woff2_compress() {
+        Ok(path) => path,
+        Err(e) => return Err(e),
+    };
     let mut process = Popen::create(
-        &["./woff2_compress", &ttf_path.to_string_lossy()],
+        &[woff2_compress, ttf_path.clone()],
         PopenConfig {
             stdout: Redirection::Pipe,
             stderr: Redirection::Pipe,
