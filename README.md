@@ -1,4 +1,4 @@
-## Gfontapi
+## GFontAPI
 
 Something I build because I wanted to learn some Rust, and also because I got tired of manually downloading and running font converters for every google font I wanted to use in my web applications. Supports adding any google font, creates a `fonts.css` file to allow you to use all the downloaded font variants and styles.
 
@@ -7,21 +7,10 @@ You need a google developer API key in order for it to work, that can be generat
 
 ### Example usage
 
-```
-$ gfontapi --help
-Manage all your google fonts from the terminal.
+I'm working on an install script, for now it requires you to clone the repo and
+run `cargo build --release`.
 
-Usage: gfontapi [OPTIONS] "[fontname]"
-
-Options
-  -t, --target-dir <TARGET_DIR>  target directory, defaults to ./fonts.
-  -a, --api-key <API_KEY>        google api key generated from developer console, can also be set as `EXPORT GFONT_API_KEY=<API_KEY>`
-  -h, --help                     Print help
-  -V, --version                  Print version
-```
-
-`gfontapi 'Inter'`
-`gfontapi 'DM Sans'`
+Here's an example of how you can use it. `gfontapi 'Inter'`, `gfontapi 'DM Sans'`.
 
 
 ### Prerequisites
