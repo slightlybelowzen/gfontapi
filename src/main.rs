@@ -1,21 +1,20 @@
 pub mod fonts;
+pub mod utils;
 
 use clap::Parser;
-use fonts::{transpile_font_weight, Font, FontFamily, FontStyles};
+use fonts::{fetch_font_data, transpile_font_weight, FontFamily, FontStyles};
 use futures::{stream::FuturesUnordered, StreamExt};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use owo_colors::OwoColorize;
-use reqwest::{Client, StatusCode};
+use reqwest::Client;
 use std::{
-    env,
-    fs::{File, OpenOptions},
+    fs::File,
     io::Write,
     path::PathBuf,
-    process,
     sync::{Arc, Mutex},
     time::Instant,
 };
-use subprocess::{Popen, PopenConfig, Redirection};
+use utils::{convert_to_woff2, get_api_key, get_output_dir, write_css_file_for_font};
 
 const BASE_URL: &str = "https://www.googleapis.com/webfonts/v1/webfonts";
 
@@ -107,58 +106,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-}
-
-fn get_output_dir(target_dir: Option<PathBuf>) -> PathBuf {
-    target_dir.unwrap_or_else(|| PathBuf::from("./fonts"))
-}
-
-async fn fetch_font_data(
-    client: &Client,
-    api_key: &str,
-    font_name: &str,
-) -> Result<FontFamily, Box<dyn std::error::Error>> {
-    let api_url = format!(
-        "{base_url}?key={key}&family={fontname}",
-        base_url = BASE_URL,
-        key = api_key,
-        fontname = font_name
-    );
-
-    let response = client
-        .get(&api_url)
-        .send()
-        .await
-        .map_err(|err| {
-            eprintln!(
-                "{}: Failed to fetch `{}`\n  {}: {}",
-                "error".red(),
-                &api_url,
-                "Caused by".red(),
-                err
-            );
-            process::exit(1);
-        })
-        .unwrap();
-
-    if response.status() != StatusCode::OK {
-        let status = response.status();
-        eprintln!(
-            "{}: Failed to fetch `{}`\n  {}: {}",
-            "error".red(),
-            &api_url,
-            "Caused by".red(),
-            status
-        );
-        process::exit(1);
-    }
-
-    let body = response.text().await?;
-    let font_data: Font = serde_json::from_str(&body)
-        .map_err(|_| eprintln!("Could not parse response"))
-        .unwrap();
-
-    Ok(font_data.items[0].clone())
 }
 
 async fn download_font_files(
@@ -258,72 +205,6 @@ async fn download_font_files(
     Ok(downloaded_files)
 }
 
-fn write_css_file_for_font(
-    font_styles: &[FontStyles],
-    font_dir: &PathBuf,
-    font_family_name: &str,
-) -> Result<String, String> {
-    let css_file_path = font_dir.join("fonts.css");
-    let font_family_display_name =
-        format_font_string(&font_dir.file_name().unwrap().to_string_lossy().to_string());
-
-    for (idx, font_style) in font_styles.iter().enumerate() {
-        let (font_style_name, font_weight) = font_style.get_style_and_weight();
-
-        let font_face_string = format!(
-            "@font-face {{\n\tfont-family: \"{}\";\n\tsrc: url({});\n\tfont-style: {};\n\tfont-weight: {};\n}}\n",
-            &font_family_display_name,
-            format!("{:?}", font_dir.join(format!("{}-{}.woff2", font_family_name, font_style))),
-            font_style_name,
-            font_weight
-        );
-
-        let mut file = if idx == 0 {
-            OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&css_file_path)
-        } else {
-            OpenOptions::new()
-                .create(true)
-                .write(true)
-                .append(true)
-                .open(&css_file_path)
-        }
-        .map_err(|_| format!("Could not create file at path: {:?}", css_file_path))?;
-
-        if let Err(e) = writeln!(file, "{}", font_face_string) {
-            eprintln!(
-                "{}: Could not write to file: {:?}\n  {}: {}",
-                "error".red(),
-                &css_file_path,
-                "Caused by".red(),
-                e
-            )
-        }
-    }
-
-    Ok(css_file_path.to_string_lossy().into())
-}
-
-fn format_font_string(input: &str) -> String {
-    input
-        .split('-')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first_char) => {
-                    let upper_first_char = first_char.to_uppercase().collect::<String>();
-                    upper_first_char + chars.as_str()
-                }
-            }
-        })
-        .collect::<Vec<String>>()
-        .join(" ")
-}
-
 async fn download_font_file(
     client: &Client,
     url: &str,
@@ -365,66 +246,4 @@ async fn download_font_file(
     // Don't finish or clear here - let the calling function handle it
     // This ensures proper coordination with the MultiProgress instance
     Ok(())
-}
-
-fn get_woff2_compress() -> Result<PathBuf, String> {
-    let binary_exists: Vec<PathBuf> = [
-        "/usr/local/bin/woff2_compress",
-        "~/.gfontapi/bin/woff2_compress",
-    ]
-    .iter()
-    .map(|x| PathBuf::from(x))
-    .filter(|x| x.exists())
-    .collect();
-    if binary_exists.len() == 0 {
-        return Err(format!(
-            "Could not locate woff2_compress binary in /usr/local/bin"
-        ));
-    }
-    Ok(binary_exists[0].clone())
-}
-
-fn convert_to_woff2(ttf_path: &PathBuf) -> Result<(), String> {
-    let woff2_compress = match get_woff2_compress() {
-        Ok(path) => path,
-        Err(e) => return Err(e),
-    };
-    let mut process = Popen::create(
-        &[woff2_compress, ttf_path.clone()],
-        PopenConfig {
-            stdout: Redirection::Pipe,
-            stderr: Redirection::Pipe,
-            ..Default::default()
-        },
-    )
-    .map_err(|_| "Failed to start woff2_compress".to_string())?;
-
-    let status = process
-        .wait()
-        .map_err(|_| "Failed to wait for woff2_compress process".to_string())?;
-
-    if !status.success() {
-        return Err(format!("woff2_compress failed with status: {:?}", status));
-    }
-
-    std::fs::remove_file(ttf_path)
-        .map_err(|_| format!("Could not delete file: {}", ttf_path.to_string_lossy()))?;
-
-    Ok(())
-}
-
-fn get_api_key(cli_api_key: Option<String>) -> String {
-    cli_api_key
-        .or_else(|| env::var("GFONT_API_KEY").ok().filter(|key| !key.is_empty()))
-        .unwrap_or_else(|| {
-            eprintln!(
-                "{}: Using gfontapi requires an API key.\
-                \n  {}\n    - export GFONT_API_KEY={}\n    - gfontapi --api-key={}",
-                "error".red(),
-                "Pass it to the program in one of the following ways".dimmed(),
-                "<YOUR_API_KEY>".cyan(),
-                "<YOUR_API_KEY>".cyan()
-            );
-            process::exit(1);
-        })
 }

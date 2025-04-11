@@ -1,6 +1,10 @@
+use owo_colors::OwoColorize;
+use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, process};
 use strum::Display;
+
+use crate::BASE_URL;
 
 #[derive(Display, Clone, Debug)]
 #[strum(serialize_all = "kebab-case")]
@@ -90,4 +94,52 @@ pub(crate) fn transpile_font_weight(font_string: &str) -> Result<FontStyles, Str
         .get(font_string)
         .cloned()
         .ok_or_else(|| "Couldn't find the variant in the hashmap".to_owned())
+}
+
+pub(crate) async fn fetch_font_data(
+    client: &Client,
+    api_key: &str,
+    font_name: &str,
+) -> Result<FontFamily, Box<dyn std::error::Error>> {
+    let api_url = format!(
+        "{base_url}?key={key}&family={fontname}",
+        base_url = BASE_URL,
+        key = api_key,
+        fontname = font_name
+    );
+
+    let response = client
+        .get(&api_url)
+        .send()
+        .await
+        .map_err(|err| {
+            eprintln!(
+                "{}: Failed to fetch `{}`\n  {}: {}",
+                "error".red(),
+                &api_url,
+                "Caused by".red(),
+                err
+            );
+            process::exit(1);
+        })
+        .unwrap();
+
+    if response.status() != StatusCode::OK {
+        let status = response.status();
+        eprintln!(
+            "{}: Failed to fetch `{}`\n  {}: {}",
+            "error".red(),
+            &api_url,
+            "Caused by".red(),
+            status
+        );
+        process::exit(1);
+    }
+
+    let body = response.text().await?;
+    let font_data: Font = serde_json::from_str(&body)
+        .map_err(|_| eprintln!("Could not parse response"))
+        .unwrap();
+
+    Ok(font_data.items[0].clone())
 }
