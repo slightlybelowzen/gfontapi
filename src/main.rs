@@ -368,16 +368,20 @@ async fn download_font_file(
 }
 
 fn get_woff2_compress() -> Result<PathBuf, String> {
-    // Check in /usr/local/bin
-    let gfontapi_bin = PathBuf::from("/usr/local/bin/gfontapi");
-
-    if gfontapi_bin.exists() {
-        return Ok(gfontapi_bin);
+    let binary_exists: Vec<PathBuf> = [
+        "/usr/local/bin/woff2_compress",
+        "~/.gfontapi/bin/woff2_compress",
+    ]
+    .iter()
+    .map(|x| PathBuf::from(x))
+    .filter(|x| x.exists())
+    .collect();
+    if binary_exists.len() == 0 {
+        return Err(format!(
+            "Could not locate woff2_compress binary in /usr/local/bin"
+        ));
     }
-
-    Err(format!(
-        "Could not locate woff2_compress binary in /usr/local/bin"
-    ))
+    Ok(binary_exists[0].clone())
 }
 
 fn convert_to_woff2(ttf_path: &PathBuf) -> Result<(), String> {
@@ -385,7 +389,6 @@ fn convert_to_woff2(ttf_path: &PathBuf) -> Result<(), String> {
         Ok(path) => path,
         Err(e) => return Err(e),
     };
-    // println!("ttf_path: {:?}", ttf_path);
     let mut process = Popen::create(
         &[woff2_compress, ttf_path.clone()],
         PopenConfig {
