@@ -10,7 +10,7 @@ use std::{
     env,
     fs::{File, OpenOptions},
     io::Write,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process,
     sync::{Arc, Mutex},
     time::Instant,
@@ -367,35 +367,27 @@ async fn download_font_file(
     Ok(())
 }
 
-fn get_woff2_compress_path() -> Result<PathBuf, String> {
-    // Check in ./
-    if let Ok(exe_path) = env::current_exe() {
-        let exe_dir = exe_path.parent().unwrap_or(Path::new("."));
-        let woff2_path = exe_dir.join("woff2_compress");
-
-        if woff2_path.exists() {
-            return Ok(woff2_path);
-        }
-    }
-
-    // Check in ~/.gfontapi/bin/
-    let home = env::var("HOME").unwrap_or_else(|_| "~".to_string());
-    let gfontapi_bin = PathBuf::from(format!("{}/.gfontapi/bin/woff2_compress", home));
+fn get_woff2_compress() -> Result<PathBuf, String> {
+    // Check in /usr/local/bin
+    let gfontapi_bin = PathBuf::from("/usr/local/bin/gfontapi");
 
     if gfontapi_bin.exists() {
         return Ok(gfontapi_bin);
     }
 
-    Err(format!("Could not locate the woff2_compress binary"))
+    Err(format!(
+        "Could not locate woff2_compress binary in /usr/local/bin"
+    ))
 }
 
 fn convert_to_woff2(ttf_path: &PathBuf) -> Result<(), String> {
-    let woff2_compress_path = match get_woff2_compress_path() {
+    let woff2_compress = match get_woff2_compress() {
         Ok(path) => path,
         Err(e) => return Err(e),
     };
+    // println!("ttf_path: {:?}", ttf_path);
     let mut process = Popen::create(
-        &[woff2_compress_path, ttf_path.clone()],
+        &[woff2_compress, ttf_path.clone()],
         PopenConfig {
             stdout: Redirection::Pipe,
             stderr: Redirection::Pipe,
